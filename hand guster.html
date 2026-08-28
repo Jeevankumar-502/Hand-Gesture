@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hand Gesture Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0A0D10;
+    --panel:rgba(12,16,20,0.72);
+    --line:rgba(255,255,255,0.10);
+    --accent:#2BE8C9;
+    --text:#EDEFEF;
+    --dim:#8A9296;
+    --warn:#FF5C5C;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{
+    height:100%;
+    background:var(--bg);
+    color:var(--text);
+    font-family:'IBM Plex Mono', monospace;
+    overflow:hidden;
+  }
+  .stage{
+    position:relative;
+    width:100vw;
+    height:100svh;
+    background:#000;
+  }
+  .flip{
+    position:absolute;
+    inset:0;
+    transform:scaleX(-1);
+  }
+  video, canvas{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    object-fit:cover;
+  }
+  video{ opacity:0; } /* video is only the source; canvas draws the visible frame */
+
+  /* ---------- HUD ---------- */
+  .hud{
+    position:absolute;
+    top:18px; left:18px;
+    background:var(--panel);
+    backdrop-filter:blur(10px);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:14px 18px;
+    min-width:190px;
+    z-index:10;
+  }
+  .hud-row{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:18px;
+    padding:6px 0;
+    font-size:12px;
+    letter-spacing:0.03em;
+  }
+  .hud-row + .hud-row{ border-top:1px dashed var(--line); }
+  .hud-label{ color:var(--dim); text-transform:uppercase; font-size:11px; }
+  .hud-value{ color:var(--text); font-weight:600; }
+  .hud-value.accent{ color:var(--accent); }
+
+  .brand{
+    position:absolute;
+    top:18px; right:18px;
+    z-index:10;
+    font-size:12px;
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    color:var(--dim);
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:10px 14px;
+  }
+  .brand b{ color:var(--text); }
+  .dot{
+    display:inline-block;
+    width:7px; height:7px;
+    border-radius:50%;
+    background:var(--accent);
+    margin-right:7px;
+    box-shadow:0 0 8px var(--accent);
+  }
+  .dot.off{ background:var(--warn); box-shadow:0 0 8px var(--warn); }
+
+  /* ---------- Start overlay ---------- */
+  .start-screen{
+    position:absolute; inset:0;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:18px;
+    background:radial-gradient(ellipse at 50% 30%, #14181c 0%, #05070a 70%);
+    z-index:30;
+    text-align:center;
+    padding:24px;
+  }
+  .start-screen h1{
+    font-size:clamp(22px,4vw,32px);
+    letter-spacing:0.02em;
+    font-weight:600;
+  }
+  .start-screen p{
+    color:var(--dim);
+    font-size:13px;
+    max-width:360px;
+    line-height:1.6;
+  }
+  .start-btn{
+    margin-top:8px;
+    background:var(--accent);
+    color:#052923;
+    border:none;
+    font-family:'IBM Plex Mono', monospace;
+    font-weight:700;
+    font-size:14px;
+    letter-spacing:0.04em;
+    text-transform:uppercase;
+    padding:14px 30px;
+    border-radius:999px;
+    cursor:pointer;
+    transition:transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .start-btn:hover{ transform:translateY(-2px); box-shadow:0 8px 24px rgba(43,232,201,0.25); }
+  .start-btn:focus-visible{ outline:3px solid #fff; outline-offset:3px; }
+  .err{
+    color:var(--warn);
+    font-size:12px;
+    max-width:340px;
+    display:none;
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    *{ transition:none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <div class="flip">
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <div class="hud" id="hud" style="display:none;">
+    <div class="hud-row">
+      <span class="hud-label">Hands detected</span>
+      <span class="hud-value" id="hv-hands">0</span>
+    </div>
+    <div class="hud-row">
+      <span class="hud-label">Landmarks</span>
+      <span class="hud-value" id="hv-points">0</span>
+    </div>
+    <div class="hud-row">
+      <span class="hud-label">Gesture</span>
+      <span class="hud-value accent" id="hv-gesture">&mdash;</span>
+    </div>
+    <div class="hud-row">
+      <span class="hud-label">Spread</span>
+      <span class="hud-value" id="hv-spread">0%</span>
+    </div>
+  </div>
+
+  <div class="brand" id="statusBrand" style="display:none;">
+    <span class="dot" id="statusDot"></span><b>TRACKING</b> live
+  </div>
+
+  <div class="start-screen" id="startScreen">
+    <h1>Hand Gesture Tracker</h1>
+    <p>Uses your webcam, locally in this browser, to track hand landmarks in real time and draw a colored skeleton over each finger. Nothing is recorded or sent anywhere.</p>
+    <button class="start-btn" id="startBtn">Enable camera</button>
+    <p class="err" id="errMsg">Couldn't access the camera. Check your browser's camera permission for this page and try again.</p>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script>
+(function(){
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const startScreen = document.getElementById('startScreen');
+  const startBtn = document.getElementById('startBtn');
+  const errMsg = document.getElementById('errMsg');
+  const hud = document.getElementById('hud');
+  const statusBrand = document.getElementById('statusBrand');
+  const statusDot = document.getElementById('statusDot');
+
+  const hvHands = document.getElementById('hv-hands');
+  const hvPoints = document.getElementById('hv-points');
+  const hvGesture = document.getElementById('hv-gesture');
+  const hvSpread = document.getElementById('hv-spread');
+
+  // Finger groups with distinct colors, matching landmark index ranges from MediaPipe Hands.
+  const FINGERS = [
+    { name:'thumb',  ids:[0,1,2,3,4],   color:'#FF3FD6' },
+    { name:'index',  ids:[0,5,6,7,8],   color:'#FF9A2E' },
+    { name:'middle', ids:[0,9,10,11,12],color:'#D6FF2E' },
+    { name:'ring',   ids:[0,13,14,15,16],color:'#2EFF7C' },
+    { name:'pinky',  ids:[0,17,18,19,20],color:'#2EE9FF' },
+  ];
+  const PALM = [[5,9],[9,13],[13,17]];
+  const TIPS = [4,8,12,16,20];
+  const PIPS = [3,6,10,14,18]; // joint one below each tip, used for extension test
+
+  function resizeCanvas(){
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resizeCanvas);
+
+  function dist(a,b){
+    const dx=a.x-b.x, dy=a.y-b.y, dz=(a.z||0)-(b.z||0);
+    return Math.sqrt(dx*dx+dy*dy+dz*dz);
+  }
+
+  function classifyGesture(lm, handedness){
+    // Extension test: tip further from wrist than pip => extended.
+    const wrist = lm[0];
+    const extended = TIPS.map((tipIdx, i) => dist(lm[tipIdx], wrist) > dist(lm[PIPS[i]], wrist) * 1.15);
+    const [thumbExt, indexExt, middleExt, ringExt, pinkyExt] = extended;
+    const count = extended.filter(Boolean).length;
+
+    if(count === 0) return 'Fist';
+    if(count === 5) return 'Open Hand';
+    if(indexExt && middleExt && !ringExt && !pinkyExt && !thumbExt) return 'Peace';
+    if(indexExt && !middleExt && !ringExt && !pinkyExt && !thumbExt) return 'Pointing';
+    if(thumbExt && !indexExt && !middleExt && !ringExt && !pinkyExt) return 'Thumbs Up';
+    if(thumbExt && pinkyExt && !indexExt && !middleExt && !ringExt) return 'Call Me';
+    return 'Open Hand';
+  }
+
+  function computeSpread(lm){
+    const wrist = lm[0];
+    const midMcp = lm[9];
+    const handScale = dist(wrist, midMcp) || 1;
+    const tips = TIPS.map(i => lm[i]);
+    let total = 0, pairs = 0;
+    for(let i=0;i<tips.length;i++){
+      for(let j=i+1;j<tips.length;j++){
+        total += dist(tips[i], tips[j]);
+        pairs++;
+      }
+    }
+    const avg = total / pairs;
+    const pct = Math.max(0, Math.min(100, Math.round((avg / handScale) * 28)));
+    return pct;
+  }
+
+  function drawHand(lm){
+    const w = canvas.width, h = canvas.height;
+    const pt = (i) => ({ x: lm[i].x * w, y: lm[i].y * h });
+
+    // palm base lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 2;
+    PALM.forEach(([a,b]) => {
+      const p1 = pt(a), p2 = pt(b);
+      ctx.beginPath();
+      ctx.moveTo(p1.x,p1.y);
+      ctx.lineTo(p2.x,p2.y);
+      ctx.stroke();
+    });
+
+    // finger chains, glowing colored lines
+    FINGERS.forEach(f => {
+      ctx.strokeStyle = f.color;
+      ctx.shadowColor = f.color;
+      ctx.shadowBlur = 10;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      f.ids.forEach((id, idx) => {
+        const p = pt(id);
+        if(idx===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);
+      });
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    });
+
+    // joints
+    for(let i=0;i<21;i++){
+      const p = pt(i);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, i===0 ? 5 : 3.4, 0, Math.PI*2);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fill();
+    }
+  }
+
+  let hands, camera;
+  let lastResults = null;
+
+  function onResults(results){
+    lastResults = results;
+    ctx.save();
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+    const list = results.multiHandLandmarks || [];
+    hvHands.textContent = list.length;
+    hvPoints.textContent = list.length * 21;
+
+    if(list.length){
+      let gestureLabel = null;
+      let spreadVal = 0;
+      list.forEach((lm, idx) => {
+        drawHand(lm);
+        const g = classifyGesture(lm);
+        if(idx === 0){ gestureLabel = g; spreadVal = computeSpread(lm); }
+      });
+      hvGesture.textContent = gestureLabel;
+      hvSpread.textContent = spreadVal + '%';
+    } else {
+      hvGesture.textContent = '\u2014';
+      hvSpread.textContent = '0%';
+    }
+    ctx.restore();
+  }
+
+  async function start(){
+    try{
+      resizeCanvas();
+      const stream = await navigator.mediaDevices.getUserMedia({ video:{ width:1280, height:720 }, audio:false });
+      video.srcObject = stream;
+      await video.play();
+
+      hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+      hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6
+      });
+      hands.onResults(onResults);
+
+      startScreen.style.display = 'none';
+      hud.style.display = 'block';
+      statusBrand.style.display = 'block';
+
+      async function frameLoop(){
+        if(video.readyState >= 2){
+          await hands.send({ image: video });
+        }
+        requestAnimationFrame(frameLoop);
+      }
+      frameLoop();
+    } catch(err){
+      console.error(err);
+      errMsg.style.display = 'block';
+      statusDot.classList.add('off');
+    }
+  }
+
+  startBtn.addEventListener('click', start);
+})();
+</script>
+
+</body>
+</html>
